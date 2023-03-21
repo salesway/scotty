@@ -7,13 +7,12 @@
     "sourceMap": true,
     "strict": true,
     "noUnusedLocals": false,
-    "outDir": "lib",
-    "rootDir": "src",
+    "outDir": "build",
+    // "rootDir": "src",
     "experimentalDecorators": true,
     "downlevelIteration": true,
-    "jsx": "react",
-    "reactNamespace": "E",
     "resolveJsonModule": true,
-    "lib": ["es6", "dom"]
-  }
+    "lib": ["es2022", "dom"]
+  },
+  "include": ["./src", "./tests"],
 }

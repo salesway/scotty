@@ -420,38 +420,3 @@ export const alias = function (fn: () => {new(...a:any[]): any}) {
     o => deserialize(o, fn()),
   )
 }
-
-@on_deserialize(function do_stuff_with(inst: Test) {
-  console.log("just deserialized !", inst)
-})
-class Test {
-  @str property: string = "zboub"
-  @num numprop: number = 0
-}
-
-class Test2 extends Test {
-  @bool.to_field("bool2") boolprop: boolean = false
-}
-
-class Test3 extends Test2 {
-  @date_tz dt: Date = new Date()
-  @date_ms dts: Date = new Date
-  @date_seconds dtsec: Date = new Date
-}
-
-class Test4 extends Test3 {
-  @bool boolprop: boolean = false
-}
-
-class Zboubi {
-  @alias(() => Test3) test: Test3 = new Test3()
-}
-
-// const ser = Test3[sym_serializer]
-const des = deserialize([{dt: "2021-04-01"}], Test3)
-console.log(des)
-const t = new Test3()
-console.log(serialize(t))
-console.log(serialize([new Test4]))
-
-console.log(serialize(new Zboubi))

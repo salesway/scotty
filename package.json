@@ -6,7 +6,8 @@
   "scripts": {
     "prepublish": "npm run build",
     "build": "tsc | wtsc",
-    "watch": "tsc -w | wtsc"
+    "watch": "tsc -w | wtsc",
+    "test": "ava"
   },
   "files": [
     "/lib",
@@ -16,6 +17,7 @@
   "license": "ISC",
   "devDependencies": {
     "typescript": "^4.9.5",
+    "ava": "^5.2.0",
     "wtsc": "^0.1.3"
   }
 }

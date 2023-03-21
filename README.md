@@ -37,6 +37,12 @@ There is only one for now :
 
 - `on_deserialized(fn: (instance) => void)`, which takes a callback that will get called everytime an instance of this class is deserialized.
 
+## Null and undefined handling
+
+By default :
+ - When serializing, undefined values are not transmitted to the resulting object.
+ - When deserializing, undefined values in the source are not interpreted and the object is left untouched (especially if its constructor)
+
 # Default property decorators
 
 - `str`

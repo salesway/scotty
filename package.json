@@ -7,7 +7,7 @@
     "prepublish": "npm run build",
     "build": "tsc | wtsc",
     "watch": "tsc -w | wtsc",
-    "test": "ava"
+    "test": "ava --no-worker-threads"
   },
   "files": [
     "/lib",

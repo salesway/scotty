@@ -9,8 +9,28 @@ declare global {
   }
 }
 
+export type Forward = NoArgClassConstructor | (() => NoArgClassConstructor)
 
-export abstract class Action<T = unknown> {
+function isClass(obj: Function) {
+  const descriptor = Object.getOwnPropertyDescriptor(obj, 'prototype')
+  // functions like `Promise.resolve` do have NO `prototype`.
+  if (!descriptor) return false
+  return !descriptor.writable
+}
+
+export function get_type(f: Forward): NoArgClassConstructor {
+  const _f = f as Function
+  if (!f[sym_serializer]) {
+    if (_f.length === 0 && !isClass(f)) return _f()
+    throw new Error("the provided forward does not resolve to a serializable type")
+  }
+  // This is a constructor
+  return f as NoArgClassConstructor
+}
+
+let _id = 0
+export abstract class Action<T extends {} = {}> {
+  __id = _id++
 
   get internal_key(): symbol | string | null { return null }
 
@@ -27,6 +47,7 @@ export abstract class Action<T = unknown> {
       Object.getPrototypeOf(_this),
       Object.getOwnPropertyDescriptors(_this)
     )
+    clone.__id = _id++
     return clone
   }
 
@@ -35,7 +56,7 @@ export abstract class Action<T = unknown> {
   */
   get decorator(): ((target: any, prop?: string) => void) & this {
     const res = (target: any, prop?: string | symbol) => {
-      this.decorate(target, prop)
+      this.apply_decorator(target, prop)
     }
     Object.setPrototypeOf(res, this)
     Object.assign(res, Function.prototype) // keep the Function methods
@@ -45,7 +66,7 @@ export abstract class Action<T = unknown> {
   abstract deserialize(instance: T, json: object): void
   abstract serialize(instance: T, json: object): void
 
-  protected decorate(target: any, prop?: string | symbol) {
+  protected apply_decorator(target: any, prop?: string | symbol) {
     // when decorating a class, we get its prototype, so we need to check
     // its constructor
     const ser = Serializer.get(target, true)
@@ -59,12 +80,20 @@ export abstract class Action<T = unknown> {
 export type PropSerializerFn<F = unknown, T = unknown> = (v: F, result: object, instance: T) => unknown
 export type PropDeserializerFn<F = unknown, T = unknown> = (value: {}, instance: T, source_object: object) => F
 
+export const enum PropActionMode {
+  Single = 0,
+  Array,
+  Map,
+  Set,
+  Object
+}
 
-export class PropAction<F = unknown, T = unknown> extends Action<T> {
+export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
   prop!: string | symbol
-  _serialize_to!: string | symbol
-  _deserialize_from!: string | symbol
-  private _ignore_null = false
+  _mode = PropActionMode.Single
+  _prop_ser!: string | symbol
+  _prop_des!: string | symbol
+  private _null_is_undefined = false
 
   constructor(
     public _serializer?: PropSerializerFn<F, T>,
@@ -78,36 +107,62 @@ export class PropAction<F = unknown, T = unknown> extends Action<T> {
   property(key: string | symbol) {
     const clone = this.clone()
     clone.prop = key
-    if (!clone._serialize_to) clone._serialize_to = key as string
-    if (!clone._deserialize_from) clone._deserialize_from = key as string
+    if (!clone._prop_ser) clone._prop_ser = key as string
+    if (!clone._prop_des) clone._prop_des = key as string
     return clone
   }
 
-  /** Make this action read-only by removing the serializer part. */
+  get array() {
+    const cl = this.clone() as unknown as PropAction<F[]>
+    const _old_ser = this._serializer
+    const _old_des = this._deserializer
+
+    cl._serializer = _old_ser == undefined ? undefined : function ser_array(value, json, inst) {
+      // value should be an array. if it is not, return one
+      if (!Array.isArray(value) || value.length === 0) return []
+      // otherwise, just return an array
+      return value.map((val, i) => _old_ser(val, json, value as any))
+    }
+
+    cl._deserializer = _old_des == undefined ? undefined : function des_array(value, inst, source) {
+      if (!Array.isArray(value) || value.length === 0) return []
+      return value.map((val, i) => _old_des(val, value as any, source))
+    }
+
+    return cl.decorator
+  }
+
+  /** Make this action read-only by removing the serializer. */
   get RO() {
     const cl = this.clone()
     cl._serializer = undefined
     return cl.decorator
   }
 
-  /** Make this action write-only by removing the deserializer part. */
+  /** Make this action write-only by removing the deserializer. */
   get WO() {
     const cl = this.clone()
     cl._deserializer = undefined
     return cl.decorator
   }
 
+  get null_is_undefined() {
+    const cl = this.clone()
+    cl._null_is_undefined = true
+    return cl.decorator
+  }
+
   /** Change the serialized field name */
   to_field(key: string | symbol) {
     const clone = this.clone()
-    clone._serialize_to = key
+    clone._prop_ser = key
     return clone.decorator
   }
 
   /** Read from another field name */
   from_field(key: string | symbol) {
     const clone = this.clone()
-    clone._deserialize_from = key
+    clone._prop_des = key
     return clone.decorator
   }
 
@@ -119,7 +174,7 @@ export class PropAction<F = unknown, T = unknown> extends Action<T> {
   }
 
   /** internal implementation */
-  protected decorate(target: any, prop: string | symbol): void {
+  protected apply_decorator(target: any, prop: string | symbol): void {
     this.addTo(target.constructor, prop)
   }
 
@@ -127,12 +182,13 @@ export class PropAction<F = unknown, T = unknown> extends Action<T> {
   deserialize(instance: T, source: object) {
     if (this._deserializer == null) return
 
-    // FIXME : should check for existence with hasOwnProperty
-    let oval = (source as any)?.[this._deserialize_from]
-    if (oval == null) {
+    let oval = (source as any)?.[this._prop_des]
+    if (oval === undefined || oval === null && this._null_is_undefined) {
+      // do not touch the object if undefined !
+    } else if (oval == null) {
       const curval = (instance as any)?.[this.prop]
       // There was no value in the original object
-      if (curval == null && !this._ignore_null) {
+      if (curval == null && !this._null_is_undefined) {
         (instance as any)[this.prop] = null
       }
     } else {
@@ -146,10 +202,12 @@ export class PropAction<F = unknown, T = unknown> extends Action<T> {
 
     // FIXME : should check for existence with hasOwnProperty
     let oval = (instance as any)?.[this.prop]
-    if (oval == null) {
-      (json as any)[this._serialize_to ?? this.prop] = null
+    if (oval === undefined || oval === null && this._null_is_undefined) {
+      // Do not write anything
+    } else if (oval == null) {
+      (json as any)[this._prop_ser ?? this.prop] = null
     } else {
-      (json as any)[this._serialize_to ?? this.prop] = this._serializer(oval, json, instance)
+      (json as any)[this._prop_ser ?? this.prop] = this._serializer(oval, json, instance)
     }
   }
 
@@ -160,7 +218,7 @@ export class PropAction<F = unknown, T = unknown> extends Action<T> {
 
 export type OnDeserializedFn<T> = (instance: T, json: object) => unknown
 
-export class ActionOnDeserialize<T> extends Action<T> {
+export class ActionOnDeserialize<T extends {}> extends Action<T> {
   constructor(public _on_deserialize: OnDeserializedFn<T>) {
     super()
   }
@@ -194,41 +252,21 @@ export class ActionPropArray<T> extends PropAction<T[]> {
   }
 }
 
-export function array_of(action: PropAction<any, any>) {
-  return new ActionPropArray(action._real_action).decorator
-}
-
-export function object_of(action: PropAction<any, any>) {
-  // NOT IMPLEMENTED
-  return new ActionPropArray(action._real_action).decorator
-}
-
-export function map_of(key: PropAction<any, any>, value: PropAction<any, any>): PropertyDecorator & PropAction<any, any>
-export function map_of(value: PropAction<any, any>): PropertyDecorator & PropAction<any, any>
-export function map_of(key: PropAction<any, any>, value?: PropAction<any, any>): any {
-  // If it has both key and value, serializes to [key, value][]
-  // When it only has value, it serializes to object by default
-
-}
-
-export function set_of<T>(action: PropAction<T, any>) {
-
-}
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////
 
 /**
  *
  */
-export class Serializer<T extends unknown = unknown> {
+export class Serializer<T extends {} = {}> {
 
   constructor(public model: NoArgClassConstructor<T>) { }
 
-  static get<T>(ctor: NoArgClassConstructor, create = false): Serializer<T> {
+  static get(ctor: NoArgClassConstructor, create = false): Serializer<{}> {
 
     if (!ctor.hasOwnProperty(sym_serializer)) {
       if (!create) throw new Error("there is no known serializer for this object")
-      const res = new Serializer<T>(ctor as {new(): T})
+      const res = new Serializer(ctor as {new(): {}})
 
       // Check if there is already a serializer defined on some parent type and add its actions
       const parent_ser = ctor[sym_serializer]
@@ -242,7 +280,7 @@ export class Serializer<T extends unknown = unknown> {
       return res
     }
 
-    return ctor[sym_serializer] as Serializer<T>
+    return ctor[sym_serializer] as Serializer
   }
 
   /** since actions have internal keys, the Map is used to override actions, mostly used by prop actions to prevent them from registering several actions. */
@@ -253,8 +291,9 @@ export class Serializer<T extends unknown = unknown> {
   addAction(action: Action) {
     const intkey = action.internal_key
     if (intkey != null) {
+
       let idx = this.action_map.get(intkey)
-      if (idx) {
+      if (idx != null) {
         this.actions[idx] = action
       } else {
         idx = this.actions.length
@@ -295,7 +334,7 @@ export class Serializer<T extends unknown = unknown> {
  * @param kls The class on which we have defined a serializer or an instance in which to deserialize the contents of the json object.
  */
 export function deserialize<T>(json: unknown[], kls: NoArgClassConstructor<T> | T[]): T[]
-export function deserialize<T>(json: unknown, kls: T): T
+export function deserialize<T>(json: unknown, kls: NoArgClassConstructor<T>): T
 export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>): T | T[] {
   if (Array.isArray(json)) {
     if (Array.isArray(kls)) {
@@ -319,8 +358,8 @@ export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>)
   }
 
   if (json == null || !(json instanceof Object)) throw new Error("input json must be an object")
-  const ser = Serializer.get<T>(kls as NoArgClassConstructor<T>)
-  return ser.deserialize(json)
+  const ser = Serializer.get(kls as NoArgClassConstructor<T>)
+  return ser.deserialize(json) as T
 }
 
 
@@ -414,9 +453,17 @@ export const date_seconds = prop_action<Date>(
   function date_from_seconds(d) { return new Date(d as number * 1000) }
 )
 
-export const alias = function (fn: () => {new(...a:any[]): any}) {
-  return prop_action(
-    o => serialize<unknown>(o),
-    o => deserialize(o, fn()),
+export const embed = function (fn: NoArgClassConstructor | (() => NoArgClassConstructor)) {
+  let type!: NoArgClassConstructor
+  function des_embed(o: {}) { return deserialize(o, type) }
+
+  const act = prop_action(
+    function ser_embed(o) { return serialize<unknown>(o) },
+    function des_pre_embed(o) {
+      type = get_type(fn)
+      act._deserializer = des_embed
+      return des_embed(o)
+    }
   )
+  return act
 }

@@ -1,47 +1,88 @@
 import * as s from "../src/scotty"
 import test from "ava"
 
-class Test {
-  @s.str property: string = "prop"
-  @s.num numprop: number = 2
-  @s.bool bool: false = false
+declare var process: any // in node
+const env = process.env
+
+class Embedded {
+  @s.as_is p_complex = new Map<string, {a: number}>()
 }
 
-class Test2 extends Test {
-  @s.bool.to_field("bool2") boolprop: boolean = false
+class Parent {
+  @s.str p_redefined?: string = "in parent"
+  @s.embed(Embedded) p_embedded = new Embedded()
+  @s.embed(() => Forward) p_forward?: Forward
+  @s.bool p_undefined?: boolean
+  @s.bool.null_is_undefined p_null_is_undefined?: boolean | null = null
+  @s.bool p_null: boolean | null = null
+
+  @s.str.array p_str_array = ["a"]
 }
 
-class Test3 extends Test2 {
-  @s.date_tz dt: Date = new Date("2017-05-01")
-  @s.date_ms dts: Date = new Date
-  @s.date_seconds dtsec: Date = new Date
+class Forward {
+
 }
 
-
-class Test4 extends Test3 {
-  @s.bool boolprop: boolean = false
-}
-
-class Zboubi {
-  @s.alias(() => Test3) test: Test3 = new Test3()
+class Child extends Parent {
+  @s.str.WO p_redefined?: string = "redefined"
+  p_str = ""
 }
 
 ////////////////////////////////////////////////////
 
 test("basic serialization", t => {
-  const v = s.serialize(new Test())
-  t.deepEqual(v, {property: "prop", numprop: 2, bool: false})
+
+  const parent_s = s.serialize(new Parent()) as any
+  if (env.DEBUG) t.log(parent_s)
+
+  //<<<
+  t.log("testing undefined and null handling")
+  t.is(false, parent_s.hasOwnProperty("p_undefined"), "an undefined property was incorrectly serialized")
+  t.is(false, parent_s.hasOwnProperty("p_null_is_undefined"), "null_is_undefined wasn't treated as undefined")
+  t.is(null, parent_s.p_null, "a null value was not serialized")
+  //>>>
+
 })
+
+test("deserialization", t => {
+  // Checking first with default deserialization
+  const parent_d = s.deserialize({}, Parent)
+
+  //<<<
+  t.assert("in parent" === parent_d.p_redefined,
+    "deserialization should not override constructed properties when they are unspecified")
+  t.assert(parent_d.p_embedded instanceof Embedded,
+    "deserialization should not override constructed properties when they are unspecified (2)")
+    //>>>
+
+  const child_d = s.deserialize({p_redefined: "ignored"}, Child)
+  if (env.DEBUG) t.log(child_d)
+
+  //<<<
+  t.is("redefined", child_d.p_redefined as string,
+    "WO should not deserialize anything, especially if overriden")
+
+  //>>>
+})
+
+
+test("error cases", t => {
+  t.pass()
+})
+
 
 test("on_deserialize", t => {
   let base = 0
+  let sub = 0
+
+  class Test { }
+
   @s.on_deserialize(() => base += 1)
   class SubTest extends Test { }
 
   s.deserialize({}, SubTest)
   t.is(base, 1, "callback is called")
 
-  let sub = 0
   @s.on_deserialize(() => sub += 1)
   class SubSub extends SubTest { }
 
@@ -49,13 +90,3 @@ test("on_deserialize", t => {
   t.is(base, 2, "callback wasn't called for parent")
   t.is(sub, 1, "callback wasn't called for child")
 })
-
-
-// const ser = Test3[sym_serializer]
-// const des = s.deserialize([{dt: "2021-04-01"}], Test3)
-// console.log(des)
-// const t = new Test3()
-// console.log(s.serialize(t))
-// console.log(s.serialize([new Test4]))
-
-// console.log(s.serialize(new Zboubi))

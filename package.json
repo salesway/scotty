@@ -1,0 +1,21 @@
+{
+  "name": "@salesway/scotty",
+  "version": "0.1.0",
+  "description": "",
+  "main": "./lib/scotty.js",
+  "scripts": {
+    "prepublish": "npm run build",
+    "build": "tsc | wtsc",
+    "watch": "tsc -w | wtsc"
+  },
+  "files": [
+    "/lib",
+    "/src"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "wtsc": "^0.1.3"
+  }
+}

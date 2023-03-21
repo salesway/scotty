@@ -16,11 +16,12 @@ class Parent {
   @s.bool.null_is_undefined p_null_is_undefined?: boolean | null = null
   @s.bool p_null: boolean | null = null
 
+  @s.embed(() => Forward) p_forward_arr?: Forward[]
   @s.str.array p_str_array = ["a"]
 }
 
 class Forward {
-
+  @s.str f_str!: string
 }
 
 class Child extends Parent {
@@ -48,21 +49,29 @@ test("deserialization", t => {
   // Checking first with default deserialization
   const parent_d = s.deserialize({}, Parent)
 
+  t.log("basic deserialization")
   //<<<
   t.assert("in parent" === parent_d.p_redefined,
     "deserialization should not override constructed properties when they are unspecified")
   t.assert(parent_d.p_embedded instanceof Embedded,
     "deserialization should not override constructed properties when they are unspecified (2)")
+  t.assert(parent_d instanceof Parent,
+    "constructed instances should be of the correct type (parent)")
     //>>>
 
   const child_d = s.deserialize({p_redefined: "ignored"}, Child)
   if (env.DEBUG) t.log(child_d)
 
+  t.log("subclass deserialization")
   //<<<
   t.is("redefined", child_d.p_redefined as string,
     "WO should not deserialize anything, especially if overriden")
-
+  t.assert(child_d instanceof Child,
+    "constructed instances should be of the correct type (child)")
   //>>>
+
+  const child_d2 = s.deserialize({p_forward_arr: [{f_str: "field1"}, {f_str: "field2"}]}, Child)
+  if (env.DEBUG) t.log(child_d2)
 })
 
 

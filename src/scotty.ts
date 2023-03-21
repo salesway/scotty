@@ -93,6 +93,7 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
   _mode = PropActionMode.Single
   _prop_ser!: string | symbol
   _prop_des!: string | symbol
+  private _map_key_type: PropAction | null = null
   private _null_is_undefined = false
 
   constructor(
@@ -112,6 +113,14 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
     return clone
   }
 
+  get map() {
+    const cl = this.clone()
+    const _old_ser = this._serializer
+    const _old_des = this._deserializer
+    // Should probably find a way to get an iterator...
+    return cl.decorator
+  }
+
   get array() {
     const cl = this.clone() as unknown as PropAction<F[]>
     const _old_ser = this._serializer
@@ -119,9 +128,13 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
 
     cl._serializer = _old_ser == undefined ? undefined : function ser_array(value, json, inst) {
       // value should be an array. if it is not, return one
-      if (!Array.isArray(value) || value.length === 0) return []
+      if (!value[Symbol.iterator] || Array.isArray(value) && value.length === 0) return []
       // otherwise, just return an array
-      return value.map((val, i) => _old_ser(val, json, value as any))
+      const res: any[] = []
+      for (let v of value[Symbol.iterator]()) {
+        res.push(_old_ser(v, json, value as any)) // FIXME ?
+      }
+      return res
     }
 
     cl._deserializer = _old_des == undefined ? undefined : function des_array(value, inst, source) {

@@ -72,6 +72,9 @@ test("deserialization", t => {
 
   const child_d2 = s.deserialize({p_forward_arr: [{f_str: "field1"}, {f_str: "field2"}]}, Child)
   if (env.DEBUG) t.log(child_d2)
+  //<<<
+  t.assert(child_d2.p_forward_arr?.[0] instanceof Forward, "forward array should have been deserialized")
+  //>>>
 })
 
 
@@ -89,13 +92,17 @@ test("on_deserialize", t => {
   @s.on_deserialize(() => base += 1)
   class SubTest extends Test { }
 
+  //<<<
   s.deserialize({}, SubTest)
   t.is(base, 1, "callback is called")
+  //>>>
 
   @s.on_deserialize(() => sub += 1)
   class SubSub extends SubTest { }
 
+  //<<<
   s.deserialize({}, SubSub)
   t.is(base, 2, "callback wasn't called for parent")
   t.is(sub, 1, "callback wasn't called for child")
+  //>>>
 })

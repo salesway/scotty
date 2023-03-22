@@ -2,7 +2,7 @@
   "name": "@salesway/scotty",
   "version": "0.1.0",
   "description": "",
-  "main": "./lib/scotty.js",
+  "main": "./build/src/scotty.js",
   "scripts": {
     "prepublish": "npm run build",
     "build": "tsc | wtsc",

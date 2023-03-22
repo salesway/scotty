@@ -1,6 +1,6 @@
 export const sym_serializer = Symbol("serializer")
 
-export type NoArgClassConstructor<T = unknown> = {new(): T}
+export type NoArgClassConstructor<T = any> = {new(): T}
 
 // Any function may be a constructor, for all we know.
 declare global {
@@ -77,8 +77,8 @@ export abstract class Action<T extends {} = {}> {
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 
-export type PropSerializerFn<F = unknown, T = unknown> = (v: F, result: object, instance: T) => unknown
-export type PropDeserializerFn<F = unknown, T = unknown> = (value: {}, instance: T, source_object: object) => F
+export type PropSerializerFn<T extends {}> = (v: T) => unknown
+export type PropDeserializerFn<T extends unknown> = (value: {}) => T
 
 export const enum PropActionMode {
   Single = 0,
@@ -88,7 +88,7 @@ export const enum PropActionMode {
   Object
 }
 
-export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
+export class PropAction extends Action {
   prop!: string | symbol
   _mode = PropActionMode.Single
   _prop_ser!: string | symbol
@@ -97,8 +97,8 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
   private _null_is_undefined = false
 
   constructor(
-    public _serializer?: PropSerializerFn<F, T>,
-    public _deserializer?: PropDeserializerFn<F, T>,
+    public _serializer?: PropSerializerFn<any>,
+    public _deserializer?: PropDeserializerFn<any>,
   ) {
     super()
   }
@@ -122,24 +122,26 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
   }
 
   get array() {
-    const cl = this.clone() as unknown as PropAction<F[]>
+    const cl = this.clone() as unknown as PropAction
     const _old_ser = this._serializer
     const _old_des = this._deserializer
 
-    cl._serializer = _old_ser == undefined ? undefined : function ser_array(value, json, inst) {
+    cl._serializer = _old_ser == undefined ? undefined : function ser_array(value) {
       // value should be an array. if it is not, return one
       if (!value[Symbol.iterator] || Array.isArray(value) && value.length === 0) return []
       // otherwise, just return an array
       const res: any[] = []
       for (let v of value[Symbol.iterator]()) {
-        res.push(_old_ser(v, json, value as any)) // FIXME ?
+        res.push(v != null ? _old_ser(v) : v)
       }
       return res
     }
 
-    cl._deserializer = _old_des == undefined ? undefined : function des_array(value, inst, source) {
+    cl._deserializer = _old_des == undefined ? undefined : function des_array(value) {
       if (!Array.isArray(value) || value.length === 0) return []
-      return value.map((val, i) => _old_des(val, value as any, source))
+      return value.map((val, i) => {
+        return val != null ? _old_des(val) : val
+      })
     }
 
     return cl.decorator
@@ -192,10 +194,10 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
   }
 
   /** internal. */
-  deserialize(instance: T, source: object) {
+  deserialize(instance: object, json: object) {
     if (this._deserializer == null) return
 
-    let oval = (source as any)?.[this._prop_des]
+    let oval = (json as any)?.[this._prop_des]
     if (oval === undefined || oval === null && this._null_is_undefined) {
       // do not touch the object if undefined !
     } else if (oval == null) {
@@ -206,11 +208,11 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
       }
     } else {
       // There was a value, we're now going to deserialize it
-      (instance as any)[this.prop] = this._deserializer(oval, instance, source)
+      (instance as any)[this.prop] = this._deserializer(oval)
     }
   }
 
-  serialize(instance: T, json: object) {
+  serialize(instance: object, json: object) {
     if (this._serializer == null) return
 
     // FIXME : should check for existence with hasOwnProperty
@@ -220,7 +222,7 @@ export class PropAction<F = unknown, T extends {} = {}> extends Action<T> {
     } else if (oval == null) {
       (json as any)[this._prop_ser ?? this.prop] = null
     } else {
-      (json as any)[this._prop_ser ?? this.prop] = this._serializer(oval, json, instance)
+      (json as any)[this._prop_ser ?? this.prop] = this._serializer(oval)
     }
   }
 
@@ -251,31 +253,14 @@ export function on_deserialize(fn: OnDeserializedFn<any>) {
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////
 
-export class ActionPropArray<T> extends PropAction<T[]> {
-  constructor(public _prop_action: PropAction) {
-    super()
-  }
-
-  deserialize(instance: unknown, source: object): void {
-
-  }
-
-  serialize(instance: unknown, json: object): void {
-
-  }
-}
-
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
-
 /**
  *
  */
-export class Serializer<T extends {} = {}> {
+export class Serializer {
 
-  constructor(public model: NoArgClassConstructor<T>) { }
+  constructor(public model: NoArgClassConstructor) { }
 
-  static get(ctor: NoArgClassConstructor, create = false): Serializer<{}> {
+  static get(ctor: NoArgClassConstructor, create = false): Serializer {
 
     if (!ctor.hasOwnProperty(sym_serializer)) {
       if (!create) throw new Error("there is no known serializer for this object")
@@ -318,18 +303,18 @@ export class Serializer<T extends {} = {}> {
     }
   }
 
-  serialize(orig: T, res: object = {}): unknown {
+  serialize(instance: object, json: object = {}): unknown {
     for (let i = 0, ac = this.actions, l = ac.length; i < l; i++) {
-      ac[i].serialize(orig, res)
+      ac[i].serialize(instance, json)
     }
-    return res
+    return json
   }
 
-  deserialize(orig: object, into: T = new this.model() as T): T {
+  deserialize(json: object, instance: object = new this.model()) {
     for (let i = 0, ac = this.actions, l = ac.length; i < l; i++) {
-      ac[i].deserialize(into, orig)
+      ac[i].deserialize(instance, json)
     }
-    return into!
+    return instance
   }
 
 }
@@ -370,7 +355,9 @@ export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>)
     }
   }
 
-  if (json == null || !(json instanceof Object)) throw new Error("input json must be an object")
+  if (json == null || !(json instanceof Object)) {
+    throw new Error("input json must be an object")
+  }
   const ser = Serializer.get(kls as NoArgClassConstructor<T>)
   return ser.deserialize(json) as T
 }
@@ -403,11 +390,11 @@ export function serialize<T>(instance: T): unknown {
 ////////////////////////////////////////////////////////////////////////////////////////////
 ////// Basic Actions
 
-function prop_action<F = unknown, T = unknown>(
-  ser: PropSerializerFn<F, T>,
-  deser: PropDeserializerFn<F, T>,
+function prop_action<F extends {}>(
+  ser: PropSerializerFn<F>,
+  deser: PropDeserializerFn<F>,
 ) {
-  return new PropAction<F, T>(ser, deser).decorator
+  return new PropAction(ser, deser).decorator
 }
 
 /**
@@ -433,11 +420,44 @@ export const as_is = prop_action<{}>(function ser_as_is(j) { return j }, functio
 
 function _pad(v: number) { return v < 10 ? "0" + v : "" + v }
 
-/**
- * A serializer for date that returns an ISO date understood by most databases, but with its local timezone offset instead of UTC like toJSON() returns.
- */
-export const date_tz = prop_action<Date>(
-  function date_with_tz_to_json(d) {
+export class DatePropAction extends PropAction {
+  constructor() {
+    super(undefined, undefined)
+    this._serializer = this.date_with_tz_to_json
+    this._deserializer = this.date_from_anything
+  }
+
+  get to_utc() {
+    const cl = this.clone()
+    cl._serializer = this.date_to_utc
+    return cl.decorator
+  }
+
+  get from_seconds() {
+    const cl = this.clone()
+    cl._deserializer = this.date_from_seconds
+    return cl.decorator
+  }
+
+  get to_seconds() {
+    const cl = this.clone()
+    cl._deserializer = this.date_to_seconds
+    return cl.decorator
+  }
+
+  protected date_to_utc(d: Date) { return d.toJSON() }
+
+  protected date_from_seconds(d: any) {
+    const num = Number(d)
+    if (!Number.isNaN(num)) return new Date(num * 1000)
+    return new Date(d) // other wise just try to cast it
+  }
+
+  protected date_to_seconds(d: Date) {
+    return Math.round(d.valueOf() / 1000)
+  }
+
+  protected date_with_tz_to_json(d: Date) {
     if (d == null) return null
     const tz_offset = d.getTimezoneOffset()
     const tz_sign = tz_offset > 0 ? '-' : '+'
@@ -447,26 +467,14 @@ export const date_tz = prop_action<Date>(
     const dt = `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}`
 
     return `${dt}${tz_string}`
-  },
-  function date_with_tz_from_json(d) { return new Date(d as any) }
-)
+  }
 
-export const date_utc = prop_action<Date>(
-  function date_to_utc(d) { return d.toJSON() },
-  function date_from_utc(d) { return new Date(d as any) }
-)
+  protected date_from_anything(d: any) { return new Date(d) }
+}
 
-export const date_ms = prop_action<Date>(
-  function date_to_ms(d) { return d.valueOf() },
-  function date_from_ms(d) { return new Date(d as any) }
-)
+export const date = new DatePropAction().decorator
 
-export const date_seconds = prop_action<Date>(
-  function date_to_seconds(d) { return Math.floor(d.valueOf() / 1000) },
-  function date_from_seconds(d) { return new Date(d as number * 1000) }
-)
-
-export const embed = function (fn: NoArgClassConstructor | (() => NoArgClassConstructor)) {
+export function embed(fn: NoArgClassConstructor | (() => NoArgClassConstructor)) {
   let type!: NoArgClassConstructor
   function des_embed(o: {}) { return deserialize(o, type) }
 

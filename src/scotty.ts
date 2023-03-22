@@ -9,6 +9,9 @@ declare global {
   }
 }
 
+export type PropSerializerFn<T extends unknown> = (v: T) => unknown
+export type PropDeserializerFn<T extends unknown> = (value: any) => T
+
 export type Forward = NoArgClassConstructor | (() => NoArgClassConstructor)
 
 function isClass(obj: Function) {
@@ -77,8 +80,6 @@ export abstract class Action<T extends {} = {}> {
 //////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////
 
-export type PropSerializerFn<T extends {}> = (v: T) => unknown
-export type PropDeserializerFn<T extends unknown> = (value: {}) => T
 
 export const enum PropActionMode {
   Single = 0,
@@ -415,7 +416,7 @@ export const bool = prop_action<boolean>(function ser_bool(b) { return !!b }, fu
 /**
  * Does nothing to the property and forwards it as-is
  */
-export const as_is = prop_action<{}>(function ser_as_is(j) { return j }, function deser_as_is(j) { return j })
+export const as_is = prop_action<any>(function ser_as_is(j) { return j }, function deser_as_is(j) { return j })
 
 
 function _pad(v: number) { return v < 10 ? "0" + v : "" + v }

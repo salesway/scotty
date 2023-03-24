@@ -242,7 +242,7 @@ export class Serializer {
 
   on_deserialize = false
   constructor(public model: NoArgClassConstructor) {
-    if (model.prototype[sym_on_deserialized]) {
+    if (model.prototype?.[sym_on_deserialized]) {
       this.on_deserialize = true
     }
   }
@@ -296,12 +296,13 @@ export class Serializer {
     return json
   }
 
-  deserialize(json: object, instance: object = new this.model()) {
+  deserialize(json: object, instance?: object) {
+    if (instance == null) instance = new this.model()
     for (let i = 0, ac = this.actions, l = ac.length; i < l; i++) {
-      ac[i].deserialize(instance, json)
+      ac[i].deserialize(instance!, json)
     }
     if (this.on_deserialize) {
-      (instance as any)[sym_on_deserialized]()
+      (instance as any)[sym_on_deserialized]?.()
     }
     return instance
   }
@@ -321,7 +322,7 @@ export class Serializer {
  * @param kls The class on which we have defined a serializer or an instance in which to deserialize the contents of the json object.
  */
 export function deserialize<T>(json: unknown[], kls: NoArgClassConstructor<T> | T[]): T[]
-export function deserialize<T>(json: unknown, kls: NoArgClassConstructor<T>): T
+export function deserialize<T>(json: unknown, kls: NoArgClassConstructor<T> | T): T
 export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>): T | T[] {
   if (Array.isArray(json)) {
     if (Array.isArray(kls)) {
@@ -329,7 +330,7 @@ export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>)
       if (kls.length !== json.length) throw new Error(`both arrays need to be the same length`)
       for (let i = 0, l = kls.length; i < l; i++) {
         // For every member of both arrays, get the serializer for the given destination item and deserialize in place.
-        const ser = Serializer.get(kls[i])
+        const ser = Serializer.get(kls[i].constructor)
         ser.deserialize(json[i], kls[i])
       }
       return kls
@@ -347,8 +348,14 @@ export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>)
   if (json == null || !(json instanceof Object)) {
     throw new Error("input json must be an object")
   }
-  const ser = Serializer.get(kls as NoArgClassConstructor<T>)
-  return ser.deserialize(json) as T
+
+  if (typeof kls === "function") {
+    const ser = Serializer.get(kls as NoArgClassConstructor<T>)
+    return ser.deserialize(json) as T
+  } else {
+    const ser = Serializer.get((kls as any).constructor as NoArgClassConstructor<T>)
+    return ser.deserialize(json, kls as object) as T
+  }
 }
 
 
@@ -476,7 +483,7 @@ export function embed(fn: NoArgClassConstructor | (() => NoArgClassConstructor))
       ser = Serializer.get(type)
 
       act._deserializer = des_embed
-      return des_embed(o)
+      return des_embed(o) as any
     }
   )
   return act

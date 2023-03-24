@@ -78,6 +78,10 @@ test("deserialization", t => {
 
   const array = s.deserialize([{f_str: "forward"}], Forward)
   t.assert(Array.isArray(array), "deserializing an array must create and array")
+
+  const forward = new Forward()
+  s.deserialize({ f_str: "new value" }, forward)
+  t.is(forward.f_str, "new value", "couldn't deserialize into an existing instance")
 })
 
 

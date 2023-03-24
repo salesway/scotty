@@ -1,5 +1,5 @@
 import * as s from "../src/scotty"
-import test from "ava"
+import test, { AssertionError, Assertions } from "ava"
 
 declare var process: any // in node
 const env = process.env
@@ -16,7 +16,7 @@ class Parent {
   @s.bool.null_is_undefined p_null_is_undefined?: boolean | null = null
   @s.bool p_null: boolean | null = null
 
-  @s.embed(() => Forward) p_forward_arr?: Forward[]
+  @s.embed(() => Forward).array p_forward_arr?: Forward[]
   @s.str.array p_str_array = ["a"]
 }
 
@@ -75,11 +75,9 @@ test("deserialization", t => {
   //<<<
   t.assert(child_d2.p_forward_arr?.[0] instanceof Forward, "forward array should have been deserialized")
   //>>>
-})
 
-
-test("error cases", t => {
-  t.pass()
+  const array = s.deserialize([{f_str: "forward"}], Forward)
+  t.assert(Array.isArray(array), "deserializing an array must create and array")
 })
 
 
@@ -87,18 +85,25 @@ test("on_deserialize", t => {
   let base = 0
   let sub = 0
 
-  class Test { }
+  class Test {
+    @s.str str = ""
+  }
 
-  @s.on_deserialize(() => base += 1)
-  class SubTest extends Test { }
+  class SubTest extends Test {
+    [s.sym_on_deserialized]() { base += 1 }
+  }
 
   //<<<
   s.deserialize({}, SubTest)
   t.is(base, 1, "callback is called")
   //>>>
 
-  @s.on_deserialize(() => sub += 1)
-  class SubSub extends SubTest { }
+  class SubSub extends SubTest {
+    [s.sym_on_deserialized]() {
+      super[s.sym_on_deserialized]()
+      sub += 1
+    }
+  }
 
   //<<<
   s.deserialize({}, SubSub)
@@ -106,3 +111,19 @@ test("on_deserialize", t => {
   t.is(sub, 1, "callback wasn't called for child")
   //>>>
 })
+
+
+test("error cases", t => {
+  class Embedded {
+    @s.str value = "hello"
+  }
+
+  class Embedder {
+    @s.embed(Embedded).array arr: Embedded[] = [] // this should not be an array.
+  }
+
+  const res = s.deserialize({arr: {value: "no"}}, Embedder)
+  t.assert(res.arr.length === 0, "if not given an array, a deserializer should fail when encountering one")
+
+})
+

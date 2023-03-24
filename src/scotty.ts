@@ -6,6 +6,7 @@ export type NoArgClassConstructor<T = any> = {new(): T}
 declare global {
   interface Function {
     [sym_serializer]?: Serializer
+    [sym_on_deserialized]?: Function
   }
 }
 
@@ -229,42 +230,26 @@ export class PropAction extends Action {
 
 }
 
-////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////
-
-export type OnDeserializedFn<T> = (instance: T, json: object) => unknown
-
-export class ActionOnDeserialize<T extends {}> extends Action<T> {
-  constructor(public _on_deserialize: OnDeserializedFn<T>) {
-    super()
-  }
-
-  deserialize(instance: T, json: object): void {
-    this._on_deserialize(instance, json)
-  }
-
-  // Does not serialize anything.
-  serialize(instance: T, json: object): void { }
-}
-
-export function on_deserialize(fn: OnDeserializedFn<any>) {
-  return new ActionOnDeserialize(fn).decorator
-}
-
 /////////////////////////////////////////////////////////////////////////////////
 /////////////////////////////////////////////////////////////////////////////////
+
+export const sym_on_deserialized = Symbol("on-deserialized")
 
 /**
  *
  */
 export class Serializer {
 
-  constructor(public model: NoArgClassConstructor) { }
+  on_deserialize = false
+  constructor(public model: NoArgClassConstructor) {
+    if (model.prototype[sym_on_deserialized]) {
+      this.on_deserialize = true
+    }
+  }
 
   static get(ctor: NoArgClassConstructor, create = false): Serializer {
 
     if (!ctor.hasOwnProperty(sym_serializer)) {
-      if (!create) throw new Error("there is no known serializer for this object")
       const res = new Serializer(ctor as {new(): {}})
 
       // Check if there is already a serializer defined on some parent type and add its actions
@@ -314,6 +299,9 @@ export class Serializer {
   deserialize(json: object, instance: object = new this.model()) {
     for (let i = 0, ac = this.actions, l = ac.length; i < l; i++) {
       ac[i].deserialize(instance, json)
+    }
+    if (this.on_deserialize) {
+      (instance as any)[sym_on_deserialized]()
     }
     return instance
   }
@@ -476,13 +464,17 @@ export class DatePropAction extends PropAction {
 export const date = new DatePropAction().decorator
 
 export function embed(fn: NoArgClassConstructor | (() => NoArgClassConstructor)) {
-  let type!: NoArgClassConstructor
-  function des_embed(o: {}) { return deserialize(o, type) }
+  let ser!: Serializer
+  function des_embed(o: any) {
+    return ser.deserialize(o)
+  }
 
   const act = prop_action(
     function ser_embed(o) { return serialize<unknown>(o) },
     function des_pre_embed(o) {
-      type = get_type(fn)
+      const type = get_type(fn)
+      ser = Serializer.get(type)
+
       act._deserializer = des_embed
       return des_embed(o)
     }

@@ -364,20 +364,20 @@ export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>)
  * @param instance the object to serialize
  * @returns null if the object was null, a json object or a json array
  */
-export function serialize<T extends any[]>(instance: T): unknown[]
-export function serialize<T>(instance: T): unknown
-export function serialize<T>(instance: T): unknown {
+export function serialize<T extends any[]>(instance: T, kls?: any): unknown[]
+export function serialize<T>(instance: T, kls?: any): unknown
+export function serialize<T>(instance: T, kls?: any): unknown {
   if (instance == null) return null
   if (Array.isArray(instance)) {
     if (instance.length === 0) return[]
     const res = new Array(instance.length)
     for (let i = 0, l = res.length; i < l; i++) {
-      const ser = Serializer.get(instance[0].constructor)
+      const ser = kls?.[sym_serializer] ?? instance[i].constructor[sym_serializer]
       res[i] = ser.serialize(instance[i])
     }
     return res
   } else {
-    const ser = Serializer.get(instance.constructor as NoArgClassConstructor<T>)
+    const ser = kls?.[sym_serializer] ?? (instance.constructor as NoArgClassConstructor<T>)[sym_serializer]
     return ser.serialize(instance)
   }
 }

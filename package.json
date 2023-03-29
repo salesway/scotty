@@ -10,8 +10,7 @@
     "test": "ava --no-worker-threads"
   },
   "files": [
-    "/lib",
-    "/src"
+    "/build/src"
   ],
   "author": "",
   "license": "ISC",

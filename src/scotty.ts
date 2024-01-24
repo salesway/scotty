@@ -115,6 +115,18 @@ export class PropAction extends Action {
     return clone
   }
 
+  get serialize_only() {
+    const cl = this.clone()
+    cl._deserializer = () => { }
+    return cl.decorator
+  }
+
+  get deserialize_only() {
+    const cl = this.clone()
+    cl._serializer = () => { }
+    return cl.decorator
+  }
+
   get map() {
     const cl = this.clone()
     const _old_ser = this._serializer
@@ -386,7 +398,7 @@ export function serialize<T>(instance: T, kls?: any): unknown {
 ////////////////////////////////////////////////////////////////////////////////////////////
 ////// Basic Actions
 
-function prop_action<F extends {}>(
+export function prop_action<F extends {}>(
   ser: PropSerializerFn<F>,
   deser: PropDeserializerFn<F>,
 ) {
@@ -465,7 +477,14 @@ export class DatePropAction extends PropAction {
     return `${dt}${tz_string}`
   }
 
-  protected date_from_anything(d: any) { return new Date(d) }
+  protected date_from_anything(d: any) {
+    if (typeof d === "string") {
+      if (d.length === 10) { // simple date
+        return new Date(d + "T00:00:00")
+      }
+    }
+    return new Date(d)
+  }
 }
 
 export const date = new DatePropAction().decorator

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "",
   "main": "./build/src/scotty.js",
+  "engines": {"node": ">=16.0.0"},
   "scripts": {
     "prepublish": "npm run build",
     "build": "tsc | wtsc",

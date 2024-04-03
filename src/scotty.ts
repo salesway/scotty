@@ -435,6 +435,18 @@ export class DatePropAction extends PropAction {
     this._deserializer = this.date_from_anything
   }
 
+  get no_time() {
+    const cl = this.clone()
+    cl._serializer = this.date_only
+    return cl.decorator
+  }
+
+  get no_tz() {
+    const cl = this.clone()
+    cl._serializer = this.date_no_tz
+    return cl.decorator
+  }
+
   get to_utc() {
     const cl = this.clone()
     cl._serializer = this.date_to_utc
@@ -451,6 +463,14 @@ export class DatePropAction extends PropAction {
     const cl = this.clone()
     cl._deserializer = this.date_to_seconds
     return cl.decorator
+  }
+
+  protected date_only(d: Date) {
+    return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`
+  }
+
+  protected date_no_tz(d: Date) {
+    return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}.${d.getMilliseconds()}`
   }
 
   protected date_to_utc(d: Date) { return d.toJSON() }

@@ -15,7 +15,7 @@ export type PropDeserializerFn<T extends unknown> = (value: any) => T
 
 export type Forward = NoArgClassConstructor | (() => NoArgClassConstructor)
 
-function isClass(obj: Function) {
+function isClass(obj: Function): obj is NoArgClassConstructor {
   const descriptor = Object.getOwnPropertyDescriptor(obj, 'prototype')
   // functions like `Promise.resolve` do have NO `prototype`.
   if (!descriptor) return false
@@ -101,6 +101,7 @@ export class PropAction extends Action {
   constructor(
     public _serializer?: PropSerializerFn<any>,
     public _deserializer?: PropDeserializerFn<any>,
+    public _type?: () => NoArgClassConstructor,
   ) {
     super()
   }
@@ -125,6 +126,10 @@ export class PropAction extends Action {
     const cl = this.clone()
     cl._serializer = () => { }
     return cl.decorator
+  }
+
+  get ro() {
+    return this.deserialize_only
   }
 
   get map() {
@@ -279,6 +284,12 @@ export class Serializer {
     return ctor[sym_serializer] as Serializer
   }
 
+  static getActionForField(ctor: NoArgClassConstructor, field: string): PropAction | null {
+    const s = this.get(ctor)
+    if (s == null) { return null }
+    return s.actions[s.action_map.get(field)!] as PropAction ?? null
+  }
+
   /** since actions have internal keys, the Map is used to override actions, mostly used by prop actions to prevent them from registering several actions. */
   action_map = new Map<string | symbol, number>()
   /** the array is maintained separately */
@@ -401,8 +412,9 @@ export function serialize<T>(instance: T, kls?: any): unknown {
 export function prop_action<F extends {}>(
   ser: PropSerializerFn<F>,
   deser: PropDeserializerFn<F>,
+  type?: () => NoArgClassConstructor,
 ) {
-  return new PropAction(ser, deser).decorator
+  return new PropAction(ser, deser, type).decorator
 }
 
 /**
@@ -523,7 +535,8 @@ export function embed(fn: NoArgClassConstructor | (() => NoArgClassConstructor))
 
       act._deserializer = des_embed
       return des_embed(o) as any
-    }
+    },
+    isClass(fn) ? () => fn : fn
   )
   return act
 }

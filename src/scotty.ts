@@ -1,542 +1,402 @@
-export const sym_serializer = Symbol("serializer")
+import dayjs from "dayjs"
+import utc from "dayjs/plugin/utc"
+import timezone from "dayjs/plugin/timezone"
 
-export type NoArgClassConstructor<T = any> = {new(): T}
+dayjs.extend(utc)
+dayjs.extend(timezone)
 
-// Any function may be a constructor, for all we know.
-declare global {
-  interface Function {
-    [sym_serializer]?: Serializer
-    [sym_on_deserialized]?: Function
-  }
+export function ser<T>(
+  deserialize: (json: unknown) => T,
+  serialize: (instance: T) => unknown
+): Serializer<T> {
+  return new Serializer(serialize, deserialize)
 }
 
-export type PropSerializerFn<T extends unknown> = (v: T) => unknown
-export type PropDeserializerFn<T extends unknown> = (value: any) => T
-
-export type Forward = NoArgClassConstructor | (() => NoArgClassConstructor)
-
-function isClass(obj: Function): obj is NoArgClassConstructor {
-  const descriptor = Object.getOwnPropertyDescriptor(obj, 'prototype')
-  // functions like `Promise.resolve` do have NO `prototype`.
-  if (!descriptor) return false
-  return !descriptor.writable
+export function noop() {
+  return undefined
 }
 
-export function get_type(f: Forward): NoArgClassConstructor {
-  const _f = f as Function
-  if (!f[sym_serializer]) {
-    if (_f.length === 0 && !isClass(f)) return _f()
-    throw new Error("the provided forward does not resolve to a serializable type")
-  }
-  // This is a constructor
-  return f as NoArgClassConstructor
+export function error(message: string): never {
+  throw new Error(message)
 }
 
-let _id = 0
-export abstract class Action<T extends {} = {}> {
-  __id = _id++
-
-  get internal_key(): symbol | string | null { return null }
-
-  /** return the Action instance, not the decorator function, since they wrap them and can cause clone() to fail if the function is `this` */
-  get _real_action() {
-    if (typeof this === "function") return Object.getPrototypeOf(this)
-    return this
-  }
-
-  /** Clone shallow copies the Action */
-  clone(): this {
-    let _this = this._real_action
-    const clone = Object.create(
-      Object.getPrototypeOf(_this),
-      Object.getOwnPropertyDescriptors(_this)
-    )
-    clone.__id = _id++
-    return clone
-  }
-
-  /**
-   * "transform" the action into a decorator function which is achieved by switching the prototype of said function to the Action object.
-  */
-  get decorator(): ((target: any, prop?: string) => void) & this {
-    const res = (target: any, prop?: string | symbol) => {
-      this.apply_decorator(target, prop)
-    }
-    Object.setPrototypeOf(res, this)
-    Object.assign(res, Function.prototype) // keep the Function methods
-    return res as any // Yeah, we cheat
-  }
-
-  abstract deserialize(instance: T, json: object): void
-  abstract serialize(instance: T, json: object): void
-
-  protected apply_decorator(target: any, prop?: string | symbol) {
-    // when decorating a class, we get its prototype, so we need to check
-    // its constructor
-    const ser = Serializer.get(target, true)
-    ser.addAction(this)
-  }
-}
-
-//////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////
-
-
-export const enum PropActionMode {
-  Single = 0,
-  Array,
-  Map,
-  Set,
-  Object
-}
-
-export class PropAction extends Action {
-  prop!: string | symbol
-  _mode = PropActionMode.Single
-  _prop_ser!: string | symbol
-  _prop_des!: string | symbol
-  private _map_key_type: PropAction | null = null
-  private _null_is_undefined = false
-
+export class Serializer<T> {
   constructor(
-    public _serializer?: PropSerializerFn<any>,
-    public _deserializer?: PropDeserializerFn<any>,
-    public _type?: () => NoArgClassConstructor,
-  ) {
-    super()
+    public serialize: <T2 extends T>(instance: T2) => unknown,
+    public deserialize: (json: unknown) => T
+  ) {}
+
+  onDeserialized(deser: (instance: T) => T | void) {
+    return ser(
+      (json: unknown) => {
+        const des = this.deserialize(json)
+        const res = deser(des)
+        return res === undefined ? des : res
+      },
+      (instance: T) => this.serialize(instance)
+    )
   }
 
-  get internal_key() { return this.prop }
+  // abstract serialize(instance: T): unknown
+  // abstract deserialize(json: unknown): T
 
-  property(key: string | symbol) {
-    const clone = this.clone()
-    clone.prop = key
-    if (!clone._prop_ser) clone._prop_ser = key as string
-    if (!clone._prop_des) clone._prop_des = key as string
-    return clone
+  get array() {
+    return ser(
+      (json: unknown) =>
+        Array.isArray(json)
+          ? json.map(this.deserialize)
+          : [this.deserialize(json)],
+      (instance: T[]) => instance.map(this.serialize)
+    )
   }
 
-  get serialize_only() {
-    const cl = this.clone()
-    cl._deserializer = () => { }
-    return cl.decorator
+  get ornull() {
+    return ser(
+      (json: unknown) => (json === null ? null : (this.deserialize(json) as T)),
+      (instance: T | null) =>
+        instance === null ? null : this.serialize(instance)
+    )
   }
 
-  get deserialize_only() {
-    const cl = this.clone()
-    cl._serializer = () => { }
-    return cl.decorator
+  get orundefined() {
+    return ser(
+      (json: unknown) =>
+        json === undefined ? undefined : (this.deserialize(json) as T),
+      (instance: T | undefined) =>
+        instance === undefined ? undefined : this.serialize(instance)
+    )
+  }
+
+  get nullable() {
+    return ser(
+      (json: unknown) => (json == null ? null : (this.deserialize(json) as T)),
+      (instance: T | null) =>
+        instance == null ? null : this.serialize(instance)
+    )
+  }
+
+  /** null, error if not present */
+  get notnull() {
+    return ser(
+      (json: unknown) =>
+        json == null
+          ? error("expected non-null value")
+          : (this.deserialize(json) as NonNullable<T>),
+      (instance: NonNullable<T>) => this.serialize(instance)
+    )
+  }
+
+  /** Give a value if there was a null or undefined ; will also apply the default value when serializing. */
+  default(value: NonNullable<T>) {
+    return ser(
+      (json: unknown) =>
+        json == undefined ? value : (this.deserialize(json) as NonNullable<T>),
+      (instance: T) =>
+        instance == null ? this.serialize(value) : this.serialize(instance)
+    )
+  }
+
+  extend<U extends T>(
+    type: new () => U,
+    props?: // [keyof U, Serializer<U[keyof U]>][]
+    { [key in keyof U]?: Serializer<U[key]> }
+  ): Serializer<U> {
+    const actions = this instanceof ObjectSerializer ? [...this._actions] : []
+    const res = new ObjectSerializer<U>(type, actions)
+    if (props != null) {
+      res.prop(props)
+    }
+    return res
   }
 
   get ro() {
-    return this.deserialize_only
-  }
-
-  get map() {
-    const cl = this.clone()
-    const _old_ser = this._serializer
-    const _old_des = this._deserializer
-    // Should probably find a way to get an iterator...
-    return cl.decorator
-  }
-
-  get array() {
-    const cl = this.clone() as unknown as PropAction
-    const _old_ser = this._serializer
-    const _old_des = this._deserializer
-
-    cl._serializer = _old_ser == undefined ? undefined : function ser_array(value) {
-      // value should be an array. if it is not, return one
-      if (!value[Symbol.iterator] || Array.isArray(value) && value.length === 0) return []
-      // otherwise, just return an array
-      const res: any[] = []
-      for (let v of value[Symbol.iterator]()) {
-        res.push(v != null ? _old_ser(v) : v)
+    return ser(
+      (json) => this.deserialize(json),
+      (instance) => {
+        return undefined
       }
-      return res
-    }
-
-    cl._deserializer = _old_des == undefined ? undefined : function des_array(value) {
-      if (!Array.isArray(value) || value.length === 0) return []
-      return value.map((val, i) => {
-        return val != null ? _old_des(val) : val
-      })
-    }
-
-    return cl.decorator
+    )
   }
-
-  /** Make this action read-only by removing the serializer. */
-  get RO() {
-    const cl = this.clone()
-    cl._serializer = undefined
-    return cl.decorator
-  }
-
-  /** Make this action write-only by removing the deserializer. */
-  get WO() {
-    const cl = this.clone()
-    cl._deserializer = undefined
-    return cl.decorator
-  }
-
-  get null_is_undefined() {
-    const cl = this.clone()
-    cl._null_is_undefined = true
-    return cl.decorator
-  }
-
-  /** Change the serialized field name */
-  to_field(key: string | symbol) {
-    const clone = this.clone()
-    clone._prop_ser = key
-    return clone.decorator
-  }
-
-  /** Read from another field name */
-  from_field(key: string | symbol) {
-    const clone = this.clone()
-    clone._prop_des = key
-    return clone.decorator
-  }
-
-  /** This method is invoked by the proxies */
-  addTo(c: NoArgClassConstructor, key: string | symbol) {
-    const clone = this.property(key)
-    const ser = Serializer.get(c, true)
-    ser.addAction(clone)
-  }
-
-  /** internal implementation */
-  protected apply_decorator(target: any, prop: string | symbol): void {
-    this.addTo(target.constructor, prop)
-  }
-
-  /** internal. */
-  deserialize(instance: object, json: object) {
-    if (this._deserializer == null) return
-
-    let oval = (json as any)?.[this._prop_des]
-    if (oval === undefined || oval === null && this._null_is_undefined) {
-      // do not touch the object if undefined !
-    } else if (oval == null) {
-      const curval = (instance as any)?.[this.prop]
-      // There was no value in the original object
-      if (curval == null && !this._null_is_undefined) {
-        (instance as any)[this.prop] = null
-      }
-    } else {
-      // There was a value, we're now going to deserialize it
-      (instance as any)[this.prop] = this._deserializer(oval)
-    }
-  }
-
-  serialize(instance: object, json: object) {
-    if (this._serializer == null) return
-
-    // FIXME : should check for existence with hasOwnProperty
-    let oval = (instance as any)?.[this.prop]
-    if (oval === undefined || oval === null && this._null_is_undefined) {
-      // Do not write anything
-    } else if (oval == null) {
-      (json as any)[this._prop_ser ?? this.prop] = null
-    } else {
-      (json as any)[this._prop_ser ?? this.prop] = this._serializer(oval)
-    }
-  }
-
 }
 
-/////////////////////////////////////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////
+function action<T>(
+  deserialize: (json: unknown, instance: T) => void,
+  serialize: (instance: T, json: { [name in keyof T]?: unknown }) => void
+): ObjectAction<T> {
+  return {
+    serialize,
+    deserialize,
+  }
+}
 
-export const sym_on_deserialized = Symbol("on-deserialized")
+/** An ObjectAction is an action run by the ObjectSerializer. */
+export interface ObjectAction<T> {
+  serialize(instance: T, json: { [name in keyof T]?: unknown }): void
+  deserialize(json: unknown, instance: T): void
+}
 
-/**
- *
- */
-export class Serializer {
+/** A PropAction is an action that serializes a single property of an object. */
+export class PropAction<T> implements ObjectAction<T> {
+  constructor(
+    public prop: keyof T,
+    public serializer: Serializer<T[keyof T]>
+  ) {}
 
-  on_deserialize = false
-  constructor(public model: NoArgClassConstructor) {
-    if (model.prototype?.[sym_on_deserialized]) {
-      this.on_deserialize = true
+  serialize(instance: T, json: { [name in keyof T]?: unknown }) {
+    const val = (instance as any)[this.prop]
+    if (val !== undefined) {
+      json[this.prop] = this.serializer.serialize(val)
     }
   }
 
-  static get(ctor: NoArgClassConstructor, create = false): Serializer {
-
-    if (!ctor.hasOwnProperty(sym_serializer)) {
-      const res = new Serializer(ctor as {new(): {}})
-
-      // Check if there is already a serializer defined on some parent type and add its actions
-      const parent_ser = ctor[sym_serializer]
-      if (parent_ser != null) {
-        for (let a of parent_ser.actions) {
-          res.addAction(a)
+  deserialize(json: unknown, instance: T) {
+    const to_deser = (json as any)?.[this.prop]
+    if (to_deser !== undefined) {
+      if (to_deser === null) {
+        ;(instance as any)[this.prop] = null
+      } else {
+        const val = this.serializer.deserialize(to_deser)
+        if (val !== undefined) {
+          ;(instance as any)[this.prop] = val
         }
       }
-
-      ctor[sym_serializer] = res
-      return res
-    }
-
-    return ctor[sym_serializer] as Serializer
-  }
-
-  static getActionForField(ctor: NoArgClassConstructor, field: string): PropAction | null {
-    const s = this.get(ctor)
-    if (s == null) { return null }
-    return s.actions[s.action_map.get(field)!] as PropAction ?? null
-  }
-
-  /** since actions have internal keys, the Map is used to override actions, mostly used by prop actions to prevent them from registering several actions. */
-  action_map = new Map<string | symbol, number>()
-  /** the array is maintained separately */
-  actions: Action[] = []
-
-  addAction(action: Action) {
-    const intkey = action.internal_key
-    if (intkey != null) {
-
-      let idx = this.action_map.get(intkey)
-      if (idx != null) {
-        this.actions[idx] = action
-      } else {
-        idx = this.actions.length
-        this.actions.push(action)
-        this.action_map.set(intkey, idx)
-      }
-    } else {
-      this.actions.push(action)
     }
   }
 
-  serialize(instance: object, json: object = {}): unknown {
-    for (let i = 0, ac = this.actions, l = ac.length; i < l; i++) {
-      ac[i].serialize(instance, json)
-    }
-    return json
+  /** Do not serialize this property. */
+  get ro() {
+    return action((json: unknown, instance: T[keyof T]) => {
+      ;(instance as any)[this.prop] = this.serializer.deserialize(json)
+    }, noop)
   }
 
-  deserialize(json: object, instance?: object) {
-    if (instance == null) instance = new this.model()
-    for (let i = 0, ac = this.actions, l = ac.length; i < l; i++) {
-      ac[i].deserialize(instance!, json)
-    }
-    if (this.on_deserialize) {
-      (instance as any)[sym_on_deserialized]?.()
-    }
-    return instance
-  }
-
-}
-
-
-/////////////////////////////////////////////////////////////////////////////////////////////
-
-
-/**
- * Deserialize a value coming from another source into either a brand new object if a constructor (or class object) is given, or an existing object if it is provided.
- *
- * `json` and `kls` must have the same length if they are both arrays.
- *
- * @param json Json value that comes from an external source
- * @param kls The class on which we have defined a serializer or an instance in which to deserialize the contents of the json object.
- */
-export function deserialize<T>(json: unknown[], kls: NoArgClassConstructor<T> | T[]): T[]
-export function deserialize<T>(json: unknown, kls: NoArgClassConstructor<T> | T): T
-export function deserialize<T>(json: unknown, kls: T | NoArgClassConstructor<T>): T | T[] {
-  if (Array.isArray(json)) {
-    if (Array.isArray(kls)) {
-      // kls are a bunch of instances
-      if (kls.length !== json.length) throw new Error(`both arrays need to be the same length`)
-      for (let i = 0, l = kls.length; i < l; i++) {
-        // For every member of both arrays, get the serializer for the given destination item and deserialize in place.
-        const ser = Serializer.get(kls[i].constructor)
-        ser.deserialize(json[i], kls[i])
-      }
-      return kls
-    } else {
-      if (typeof kls !== "function") throw new Error(`expected either an array of instances or a constructor`)
-      const ser = Serializer.get(kls as NoArgClassConstructor<T>)
-      const res = new Array(json.length)
-      for (let i = 0, l = res.length; i < l; i++) {
-        res[i] = ser.deserialize(json[i])
-      }
-      return res as T[]
-    }
-  }
-
-  if (json == null || !(json instanceof Object)) {
-    throw new Error("input json must be an object")
-  }
-
-  if (typeof kls === "function") {
-    const ser = Serializer.get(kls as NoArgClassConstructor<T>)
-    return ser.deserialize(json) as T
-  } else {
-    const ser = Serializer.get((kls as any).constructor as NoArgClassConstructor<T>)
-    return ser.deserialize(json, kls as object) as T
+  /** Do not deserialize this property, but serialize it. */
+  get wo() {
+    return action(noop, (instance: T[keyof T], json: unknown) => {
+      ;(json as any)[this.prop] = this.serializer.serialize(instance)
+    })
   }
 }
 
+export class ObjectSerializer<T> extends Serializer<T> {
+  constructor(
+    public type: (new () => T) | null,
+    public _actions: ObjectAction<T>[] = []
+  ) {
+    super(
+      (instance: T) => {
+        let result: { [name in keyof T]?: unknown } = {}
+        for (let a = this._actions, i = 0; i < a.length; i++) {
+          a[i].serialize(instance, result)
+        }
+        return result
+      },
+      (json: unknown) => {
+        let result: T =
+          this.type != null ? Object.create(this.type.prototype) : {}
+        for (let a = this._actions, i = 0; i < a.length; i++) {
+          a[i].deserialize(json, result)
+        }
+        // console.log("deserialize", json, result)
+        return result
+      }
+    )
+  }
 
-/**
- * Serialize
- * @param instance the object to serialize
- * @returns null if the object was null, a json object or a json array
- */
-export function serialize<T extends any[]>(instance: T, kls?: any): unknown[]
-export function serialize<T>(instance: T, kls?: any): unknown
-export function serialize<T>(instance: T, kls?: any): unknown {
-  if (instance == null) return null
-  if (Array.isArray(instance)) {
-    if (instance.length === 0) return[]
-    const res = new Array(instance.length)
-    for (let i = 0, l = res.length; i < l; i++) {
-      const ser = kls?.[sym_serializer] ?? instance[i].constructor[sym_serializer]
-      res[i] = ser.serialize(instance[i])
+  private __prop(prop: keyof T, serializer: SerializerDef<T[keyof T]>): this {
+    const ser = typeof serializer === "function" ? serializer() : serializer
+    const action = new PropAction(prop, ser)
+    let prev = this._actions.findIndex(
+      (p) => p instanceof PropAction && p.prop === prop
+    )
+    if (prev >= 0) {
+      this._actions[prev] = action
+    } else {
+      this._actions.push(action)
+    }
+    return this
+  }
+
+  prop(props: { [key in keyof T]?: SerializerDef<T[key]> }) {
+    const res = new ObjectSerializer<T>(this.type, this._actions.slice())
+
+    for (let [prp, serializer] of Object.entries(props || {})) {
+      res.__prop(prp as keyof T, serializer as SerializerDef<T[keyof T]>)
     }
     return res
-  } else {
-    const ser = kls?.[sym_serializer] ?? (instance.constructor as NoArgClassConstructor<T>)[sym_serializer]
-    return ser.serialize(instance)
   }
 }
 
+// export interface Serializer<T> {
+//   serialize(instance: T): unknown
+//   serialize_array(instance: T[]): unknown[]
 
-////////////////////////////////////////////////////////////////////////////////////////////
-////// Basic Actions
+//   deserialize(json: unknown): T
+//   deserialize_into(json: unknown, instance: T): void
+//   deserialize_into_clone(json: unknown, instance: T): T
 
-export function prop_action<F extends {}>(
-  ser: PropSerializerFn<F>,
-  deser: PropDeserializerFn<F>,
-  type?: () => NoArgClassConstructor,
-) {
-  return new PropAction(ser, deser, type).decorator
+//   deserialize_array(json: unknown[]): T[]
+//   deserialize_into_array(json: unknown[], instance: T[]): void
+// }
+
+//////////////////////////////////////////
+
+function _map_maybe_array<T>(json: unknown, f: (json: unknown) => T): T[] {
+  return Array.isArray(json) ? json.map(f) : [f(json)]
 }
 
-/**
- * Transforms from and to strings
- */
-export const str = prop_action<string>(function ser_str(s) { return String(s) }, function deser_str(s) { return String(s) })
+export const bigint = ser(
+  (json) => BigInt(json as string | number),
+  (json) => json.toString()
+)
+export const str = ser(
+  (json) => json!.toString(),
+  (json) => json.toString()
+)
+export const num = ser(
+  (json) => Number(json),
+  (json) => Number(json)
+)
+export const bool = ser(
+  (json) => !!json,
+  (json) => !!json
+)
 
-/**
- * Transforms from and to numbers
- */
-export const num = prop_action<number>(function ser_num(n) { return Number(n) }, function deser_num(n) { return Number(n) })
+export const date = ser(
+  (json) => dayjs(json as string).startOf("day"),
+  (json) => json.format("YYYY-MM-DD")
+)
 
-/**
- * Transforms from and to booleans
- */
-export const bool = prop_action<boolean>(function ser_bool(b) { return !!b }, function deser_bool(b) { return !!b })
+/** This datetime handles dates in the local timezone */
+export const timestamptz = ser(
+  (json) => dayjs(json as string),
+  (dt) => dt.format("YYYY-MM-DDTHH:mm:ss.SSSZ")
+)
+/** This datetime handles dates in UTC */
+export const timestamp = ser(
+  (json) => dayjs.utc(json as string),
+  (json) => json.toISOString()
+)
 
-/**
- * Does nothing to the property and forwards it as-is
- */
-export const as_is = prop_action<any>(function ser_as_is(j) { return j }, function deser_as_is(j) { return j })
-
-
-function _pad(v: number) { return v < 10 ? "0" + v : "" + v }
-
-export class DatePropAction extends PropAction {
-  constructor() {
-    super(undefined, undefined)
-    this._serializer = this.date_with_tz_to_json
-    this._deserializer = this.date_from_anything
-  }
-
-  get no_time() {
-    const cl = this.clone()
-    cl._serializer = this.date_only
-    return cl.decorator
-  }
-
-  get no_tz() {
-    const cl = this.clone()
-    cl._serializer = this.date_no_tz
-    return cl.decorator
-  }
-
-  get to_utc() {
-    const cl = this.clone()
-    cl._serializer = this.date_to_utc
-    return cl.decorator
-  }
-
-  get from_seconds() {
-    const cl = this.clone()
-    cl._deserializer = this.date_from_seconds
-    return cl.decorator
-  }
-
-  get to_seconds() {
-    const cl = this.clone()
-    cl._deserializer = this.date_to_seconds
-    return cl.decorator
-  }
-
-  protected date_only(d: Date) {
-    return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}`
-  }
-
-  protected date_no_tz(d: Date) {
-    return `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}.${d.getMilliseconds()}`
-  }
-
-  protected date_to_utc(d: Date) { return d.toJSON() }
-
-  protected date_from_seconds(d: any) {
-    const num = Number(d)
-    if (!Number.isNaN(num)) return new Date(num * 1000)
-    return new Date(d) // other wise just try to cast it
-  }
-
-  protected date_to_seconds(d: Date) {
-    return Math.round(d.valueOf() / 1000)
-  }
-
-  protected date_with_tz_to_json(d: Date) {
-    if (d == null) return null
-    const tz_offset = d.getTimezoneOffset()
-    const tz_sign = tz_offset > 0 ? '-' : '+'
-    const tz_hours = _pad(Math.abs(Math.floor(tz_offset / 60)))
-    const tz_minutes = _pad(Math.abs(tz_offset) % 60)
-    const tz_string = `${tz_sign}${tz_hours}:${tz_minutes}`
-    const dt = `${d.getFullYear()}-${_pad(d.getMonth()+1)}-${_pad(d.getDate())}T${_pad(d.getHours())}:${_pad(d.getMinutes())}:${_pad(d.getSeconds())}`
-
-    return `${dt}${tz_string}`
-  }
-
-  protected date_from_anything(d: any) {
-    if (typeof d === "string") {
-      if (d.length === 10) { // simple date
-        return new Date(d + "T00:00:00")
-      }
-    }
-    return new Date(d)
-  }
-}
-
-export const date = new DatePropAction().decorator
-
-export function embed(fn: NoArgClassConstructor | (() => NoArgClassConstructor)) {
-  let ser!: Serializer
-  function des_embed(o: any) {
-    return ser.deserialize(o)
-  }
-
-  const act = prop_action(
-    function ser_embed(o) { return serialize<unknown>(o) },
-    function des_pre_embed(o) {
-      const type = get_type(fn)
-      ser = Serializer.get(type)
-
-      act._deserializer = des_embed
-      return des_embed(o) as any
-    },
-    isClass(fn) ? () => fn : fn
+export const set = <T>(s: Serializer<T>) =>
+  ser(
+    (json) => new Set<T>(_map_maybe_array(json, s.deserialize)),
+    (json) => Array.from(json).map(s.serialize)
   )
-  return act
+
+export const map = <K, V>(sk: Serializer<K>, sv: Serializer<V>) =>
+  ser(
+    (json) =>
+      new Map<K, V>(
+        _map_maybe_array(json, (item) => {
+          if (!Array.isArray(item) || item.length !== 2) {
+            throw new Error("expected 2-element array")
+          }
+          const [k, v] = item as [K, V]
+          return [sk.deserialize(k), sv.deserialize(v)]
+        })
+      ),
+    (json) =>
+      Array.from(json.entries()).map(([k, v]) => [
+        sk.serialize(k),
+        sv.serialize(v),
+      ])
+  )
+
+export const map_as_object = <V>(s: Serializer<V>) =>
+  ser(
+    (json) =>
+      new Map<string, V>(
+        Object.entries(json as Record<string, V>).map(([k, v]) => [
+          k,
+          s.deserialize(v),
+        ])
+      ),
+    (json) =>
+      Object.fromEntries(
+        Array.from(json.entries()).map(([k, v]) => [k, s.serialize(v)])
+      )
+  )
+
+export const as_is = ser(
+  (json) => json,
+  (json) => json
+)
+
+export function forward<T>(serializer: () => Serializer<T>): Serializer<T> {
+  let _ser: Serializer<T> | null = null
+  const res = ser(
+    (json) => {
+      if (_ser == null) {
+        _ser = serializer()
+      }
+      return _ser.deserialize(json)
+    },
+    (instance: T) => {
+      if (_ser == null) {
+        _ser = serializer()
+      }
+      return _ser.serialize(instance)
+    }
+  )
+  return res
 }
+
+export function instanceOf<T>(
+  type: new () => T,
+  props?: { [key in keyof T]?: Serializer<T[key]> }
+): Serializer<T> {
+  let ser = new ObjectSerializer<T>(type)
+  if (props != null) {
+    ser = ser.prop(props)
+  }
+
+  return ser
+}
+
+export function tuple<T extends Serializer<any>[]>(
+  ...serializers: T
+): Serializer<{
+  [K in keyof T]: T[K] extends Serializer<infer U> ? U : never
+}> {
+  return ser(
+    (json) =>
+      !Array.isArray(json) || json.length !== serializers.length
+        ? error("expected array")
+        : (serializers.map((ser, idx) => ser.deserialize(json[idx])) as any),
+    (instance: {
+      [K in keyof T]: T[K] extends Serializer<infer U> ? U : never
+    }) => serializers.map((ser, idx) => ser.serialize(instance[idx]))
+  )
+}
+
+export function obj<T extends { [name: string | symbol]: SerializerDef<any> }>(
+  props: T
+): Serializer<{
+  [name in keyof T]: T[name] extends SerializerDef<infer U> ? U : T[name]
+}> {
+  return new ObjectSerializer<any>(null).prop(props) as any
+}
+
+export interface Wellknown {
+  [name: string]: () => Serializer<any>
+}
+
+const _wellknown = new Map<string, () => Serializer<any>>()
+
+export function wellknown<K extends keyof Wellknown>(
+  name: K
+): ReturnType<Wellknown[K]> {
+  return _wellknown.get(name as string)?.() as ReturnType<Wellknown[K]>
+}
+
+export function register<S extends Serializer<any>>(
+  name: string,
+  serializer: () => S
+): () => S {
+  _wellknown.set(name, serializer)
+  return serializer
+}
+
+export type UnderlyingType<T> = T extends Serializer<infer U> ? U : T
+export type SerializerDef<T> = Serializer<T> | (() => Serializer<T>)

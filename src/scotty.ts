@@ -145,7 +145,6 @@ export class PropAction<T> implements ObjectAction<T> {
   serialize(instance: T, json: { [name in keyof T]?: unknown }) {
     const val = (instance as any)[this.prop]
     if (val !== undefined) {
-      console.log("serialize", this.prop, val)
       json[this.prop] = this.serializer.serialize(val)
     }
   }

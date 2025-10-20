@@ -256,8 +256,8 @@ export const str = ser(
   (json) => json.toString()
 )
 export const num = ser(
-  (json) => Number(json),
-  (json) => Number(json)
+  (json) => (json != null ? Number(json) : null),
+  (json) => (json != null ? Number(json) : null)
 )
 export const bool = ser(
   (json) => !!json,

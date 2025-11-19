@@ -145,7 +145,10 @@ export class PropAction<T> implements ObjectAction<T> {
   serialize(instance: T, json: { [name in keyof T]?: unknown }) {
     const val = (instance as any)[this.prop]
     if (val !== undefined) {
-      json[this.prop] = this.serializer.serialize(val)
+      const serval = this.serializer.serialize(val)
+      if (serval !== undefined) {
+        json[this.prop] = serval
+      }
     }
   }
 
@@ -249,11 +252,11 @@ function _map_maybe_array<T>(json: unknown, f: (json: unknown) => T): T[] {
 
 export const bigint = ser(
   (json) => BigInt(json as string | number),
-  (json) => json.toString()
+  (json) => json?.toString()
 )
 export const str = ser(
-  (json) => json!.toString(),
-  (json) => json.toString()
+  (json) => json!.toString()!,
+  (json) => json?.toString()
 )
 export const num = ser(
   (json) => (json != null ? Number(json) : null) as number,

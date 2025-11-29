@@ -37,6 +37,13 @@ export class Serializer<T> {
     )
   }
 
+  wrap<U>(deserialize: (json: T) => U, serialize: (instance: U) => T) {
+    return ser(
+      (json: unknown) => deserialize(this.deserialize(json)),
+      (instance: U) => this.serialize(serialize(instance))
+    )
+  }
+
   // abstract serialize(instance: T): unknown
   // abstract deserialize(json: unknown): T
 

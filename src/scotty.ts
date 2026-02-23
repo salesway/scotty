@@ -97,9 +97,9 @@ export class Serializer<T> {
   default(value: NonNullable<T>) {
     return ser(
       (json: unknown) =>
-        json == undefined ? value : (this.deserialize(json) as NonNullable<T>),
-      (instance: T) =>
-        instance == null ? this.serialize(value) : this.serialize(instance)
+        json == undefined ? value as NonNullable<T> : (this.deserialize(json) as NonNullable<T>),
+      (instance: NonNullable<T>) =>
+        instance == null ? this.serialize(value as NonNullable<T>) : this.serialize(instance)
     )
   }
 
@@ -161,15 +161,9 @@ export class PropAction<T> implements ObjectAction<T> {
 
   deserialize(json: unknown, instance: T) {
     const to_deser = (json as any)?.[this.prop]
-    if (to_deser !== undefined) {
-      if (to_deser === null) {
-        ;(instance as any)[this.prop] = null
-      } else {
-        const val = this.serializer.deserialize(to_deser)
-        if (val !== undefined) {
-          ;(instance as any)[this.prop] = val
-        }
-      }
+    const val = this.serializer.deserialize(to_deser)
+    if (val !== undefined) {
+      ;(instance as any)[this.prop] = val
     }
   }
 
@@ -262,7 +256,7 @@ export const bigint = ser(
   (json) => json?.toString()
 )
 export const str = ser(
-  (json) => json!.toString()!,
+  (json) => json?.toString(),
   (json) => json?.toString()
 )
 export const num = ser(
@@ -270,7 +264,7 @@ export const num = ser(
   (json) => (json != null ? Number(json) : null)
 )
 export const bool = ser(
-  (json) => !!json,
+  (json) => json as boolean | undefined,
   (json) => !!json
 )
 

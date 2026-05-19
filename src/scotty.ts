@@ -124,6 +124,19 @@ export class Serializer<T> {
       }
     )
   }
+
+  get required() {
+    return ser(
+      (json: unknown) => {
+        const val = this.deserialize(json)
+        if (val === undefined) {
+          throw new Error("expected value")
+        }
+        return val
+      },
+      (instance: T) => this.serialize(instance)
+    )
+  }
 }
 
 function action<T>(
@@ -165,6 +178,16 @@ export class PropAction<T> implements ObjectAction<T> {
     if (val !== undefined) {
       ;(instance as any)[this.prop] = val
     }
+  }
+
+  get required() {
+    return action((json: unknown, instance: T) => {
+      const val = this.serializer.deserialize(json)
+      if (val === undefined) {
+        throw new Error("expected value")
+      }
+      ;(instance as any)[this.prop] = val
+    }, noop)
   }
 
   /** Do not serialize this property. */
@@ -283,6 +306,36 @@ export const timestamp = ser(
   (json) => dayjs.utc(json as string),
   (json) => json.toISOString()
 )
+
+export const either = <T extends Serializer<any>[]>(...serializers: T): Serializer<{ [K in keyof T]: T[K] extends Serializer<infer U> ? U : never }[number]> =>
+  ser(
+    (json) => {
+      for (const s of serializers) {
+        try {
+          const res = s.deserialize(json)
+          if (res !== undefined) {
+            return res
+          }
+        } catch (error) {
+          continue
+        }
+      }
+      throw new Error("expected one of " + serializers.map((s) => s.constructor.name).join(", ") + ", got " + json)
+    },
+    (json) => {
+      for (const s of serializers) {
+        try {
+          const res = s.serialize(json)
+          if (res !== undefined) {
+            return res
+          }
+        } catch (error) {
+          continue
+        }
+      }
+      throw new Error("expected one of " + serializers.map((s) => s.constructor.name).join(", ") + ", got " + json)
+    }
+  )
 
 export const set = <T>(s: Serializer<T>) =>
   ser(
